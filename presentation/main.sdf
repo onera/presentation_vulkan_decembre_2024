@@ -1,0 +1,138 @@
+/::
+custom_css: assets/custom.css
+::/
+
+## .[cover]
+# Vulkan pour le calcul scientifique 
+
+!image(images/Onera-bloc-marque.png, ONERA, , 150)
+
+## Historique .[vulkan]
+
+<table style="margin-top: 40px">
+<tr>
+<td style="padding: 20px">
+OpenGL en 1992 par Silicon Graphics
+</td>
+<td style="background: white; padding: 20px">
+!image(images/OpenGL_logo.svg.png, opengl, , 150)
+</td>
+</tr>
+<tr>
+<td style="padding: 20px">
+Concurrence avec DirectX
+</td>
+<td style="background: white; padding: 20px">
+!image(images/DirectX_logo.png, directx, , 150)
+</td>
+</tr>
+<tr>
+<td style="padding: 20px">
+Vulkan en 2016
+</td>
+<td style="background: white; padding: 20px">
+!image(images/Vulkan_logo.svg.png, vulkan, , 150)
+</td>
+</tr>
+</table>
+
+## Vulkan : Qu'est-ce donc ? .[vulkan]
+
+- Une API couche mince pour manipuler les GPGPUs (C ou C++)
+- Première version apparue en 2016 (version 1.0)
+- Dernière version apparue le 30 Août 2024 (version 1.3.295)
+- Destiné à remplacer OpenGL et Open GL/Es
+- Permet de mieux prendre en compte les architectures modernes des GPGPUs 
+- Création des images multithreadables (intéressant sur les smartphones et les tablettes)
+- Fonctionne sur un grand nombre d'OS et de GPGPUS
+
+## .[cover]
+# Vue globale de Vulkan
+
+## Buts de Vulkan .[vulkan]
+
+#### 🤔  Objectifs  🤔
+
+- Se débarrasser de l'héritage d'OpenGL
+- Permettre l'utilisation de la puissance totale de la machine
+
+#### 💻 Réalisation 💻
+
+- Pas de state machine globale : permet le multithreading
+- Synchronisations CPU-GPU gérées par le développeur **⇒** pilote ignore concurrences mémoires
+- Mémoire entièrement gérée par le développeur **⇒** pas d'hypothèse du pilote sur les ressources 
+- Vérifications erreurs minimales **⇒** pas de vérifications faites par le pilote pour optimisation.
+
+## 
+## API proposées .[vulkan]
+
+- Par défaut : **C** ou **C++**
+- **C++** permet code plus concis et plus sûr
+- Mais plupart des tutoriaux uniquement pour le **C** !
+- Plusieurs *wrappers* existent pour Python
+- *vulkano-rs* pour rust
+- etc.
+
+## Architecture globale  .[vulkan]
+
+<table style="margin-top: 40px">
+<td style="padding: 20px">
+!image(images/Vulkan-Diagram.avif,, ,780)
+</td>
+<td style="padding: 20px">
+<a href="https://gpuopen.com/learn/understanding-vulkan-objects/">
+<span style="color: #ffff00; font-style:italic">©AMD GPUOPen</span>
+</a><br><br>
+👉 Lignes <span style="color: #ff0000">⏤►</span> représentent ordre de création<br><br>
+👉 Lignes <span style="color: #ff0000">◆⏤</span> représentent composition (objets existent déjà)<br><br>
+👉 Lignes <span style="color: #ff0000">┄┄</span> représentent d'autres relations<br><br>
+👉 <span style="color: #000000; background-color:lightgreen; border: 2px solid black; padding: 2px">objet</span> n'a pas son propre type (référencé que par un entier)<br><br>
+👉 <span style="color: #000000; background-color:red; border: 2px solid black; padding: 2px">objet</span> principal permettant création autres objets de la section.
+</td>
+</table>
+
+## 
+## Objets Vulkan .[vulkan]
+
+- <span class="ccode">Instance</span> : Premier objet à créer connectant votre application et le runtime Vulkan;
+    - Définir toutes les couches logicielles utilisées (comme celle de validation);
+    - Définir les extensions utilisées
+- <span class="ccode">PhysicalDevice</span>: Représente un périphérique physique compatible avec Vulkan;
+    - Enumération des <span class="ccode">FamilyQueue</span>s (graphisme, calcul, raytracing, ...)
+    - Enumération des <span class="ccode">MemoryHeap</span>s : représente un réservoir pour une mémoire spécifique. 
+    - Enumération des <span class="ccode">MemoryType</span>s : propriétés mémoire (visible, cohérent, en cache).
+- <span class="ccode">Device</span>: Périphérique logique. Permet de créer tous les autres objets. 
+    - A la création, spécifier certaines fonctionnalités utilisées (ex. filtres des textures anisotropiques).
+    - Spécifier toutes les queues utilisées, leur nombre et leurs familles de queue.
+
+## Initialisation du contexte .[vulkan]
+
+#### Remplissage information sur l'application
+
+<pre><code class="language-*">vk::ApplicationInfo application_info;
+application_info.setApiVersion(vk::ApiVersion13)
+                .setPApplicationName("Computing shader")
+                .setApplicationVersion(0)
+                .setPEngineName("Computing engine")
+                .setEngineVersion(0);
+</code></pre> 
+
+#### Remplissage information création contexte
+
+<pre><code class="language-cpp">vk::InstanceCreateInfo create_info;
+create_info.setPApplicationInfo(&application_info)
+           .setEnabledLayerCount(uint32_t(this->enabled_layers.size()))
+           .setPpEnabledLayerNames(enabled_layers.data())
+           .setEnabledExtensionCount(uint32_t(this->enabled_extensions.size()))
+           .setPpEnabledExtensionNames(this->enabled_extensions.data());
+</code></pre>
+
+<pre><code>instance = vk::createInstance(create_info);
+</code></pre>
+
+
+##  Pipeline Vulkan complet .[vulkan]
+
+!image(images/vulkan_pipeline_block_diagram.png, vulkan diagram, , )
+
+

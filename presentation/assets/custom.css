@@ -1,0 +1,71 @@
+
+:root {
+    font-family: "Lato", sans-serif;
+  
+    --sd-background-color: #2063bb;
+    --sd-heading-color: rgba(255, 255, 255, 0.97);
+    --sd-text-color: rgb(255, 255, 255);
+    --sd-primary-color: #de674a;
+}
+
+h1,
+h2,
+h3 {
+  font-family: Impact, sans-serif;
+  text-transform: uppercase;
+}
+
+h1 {
+  width: 70%;
+}
+
+h4 {
+  color: rgb(255,255,0);
+  background: rgb(0,0,128);
+}
+
+p,
+li {
+  margin: 0.5em auto;
+}
+
+.ccode {
+  color: rgb(255, 255, 0);
+  font-family:sans-serif;
+  font-size: 80%;
+}
+
+.sd-app .cover {
+  background-image: url(backgrounds/onera_background.png);
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+.sd-app .vulkan {
+  background-image: url(backgrounds/Onera-bloc-marque.png);
+  background-repeat: no-repeat;
+  background-position: bottom right;
+  background-size: 10%;
+  }
+
+.sd-app .figure {
+  width: 100%;
+  height: 100%;
+  border: 2px solid rgb(4, 0, 251);
+  padding: 4px;
+}
+
+.sd-slide pre {
+    width: 80%;
+    border: 2px solid rgb(251, 138, 0);
+    font-size: 3vh;
+    position: relative;
+    margin: 20px auto;
+  }
+  
+.sd-slide pre code {
+    height: 100%;
+    font-size: 1.5vw;
+    color:black;
+  }
+  

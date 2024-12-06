@@ -1,0 +1,280 @@
+#version 450
+#  define WRK_GRP 32
+#  define OPTIM 3
+
+layout(set = 0, binding = 0) buffer InputMatrixA 
+{
+    float A[];
+};
+
+layout(set = 0, binding = 1) buffer InputMatrixB 
+{
+    float B[];
+};
+
+layout(set = 0, binding = 2) buffer OutputMatrixC 
+{
+    float C[];
+};
+
+layout( push_constant ) uniform constants
+{
+    int dimension;
+} constantes;
+
+#if OPTIM == 0
+
+// Produit matrice-matrice naïf. Le principe est le suivant :
+//
+//  1. On affecte le calcul d'un Cij pour chaque thread
+//  2. On effectue le produit scalaire de la ligne i de la matrice A avec la colonne j de la matrice B
+//
+layout(local_size_x = WRK_GRP, local_size_y = WRK_GRP) in;
+void main()
+{
+    const int N = constantes.dimension;
+    uint row = gl_GlobalInvocationID.y;
+    uint col = gl_GlobalInvocationID.x;
+
+    float value = 0.f;
+
+    // Pour chaque bloc de travail k
+    for (int k = 0; k < N; ++k) 
+    {
+        value += A[row * N + k] * B[k*N + col];
+    }
+
+    // Écrire le résultat dans la matrice de sortie
+    if (row < N && col < N) 
+    {
+        C[row * N + col] = value;
+    }
+}
+#elif OPTIM == 1
+layout(local_size_x = WRK_GRP, local_size_y = WRK_GRP) in;
+
+// NB : les tableaux sur mémoire partagée ne peuvent pas être définies dans une fonction !
+//      Obligatoirement définies en global dans le shader !
+shared float sharedA[WRK_GRP][WRK_GRP];
+shared float sharedB[WRK_GRP][WRK_GRP];
+
+// Première optimisation du produit matrice-matrice :
+//
+//   1. Chaque bloc de threads va s'occuper d'un sous-bloc C_{IJ} de C (et chaque thread du bloc s'occupe d'un coefficient de C_{IJ})
+//   2. Pour cela, on va effectuer des produits de sous-blocs A_{IK} et B_{KJ} de A et B 
+//                    C_{IJ} = somme_{K=1,nb blocs} A_{IK}.B_{KJ} 
+//   3. L'algorithme est alors le suivant :
+//         a) On initialise un accumulateur destiné à calculer le coefficient C_{iloc,jloc} de C_{IJ} affecté au thread courant
+//         b) Pour K allant de 0 à nbre de blocs -1 
+//             i. Chaque thread du bloc de threads va remplir un coefficient de A_{IK} et B_{KJ}
+//            ii. On synchronise le threads du bloc pour s'assurer que tous les threads ont bien rempli son coefficient dans A et B
+//           iii. On calcule le produit scalaire de la ligne i_loc de A_{IK} et la colonne j_loc de B_{KJ} qu'on rajoute à l'accumulateur
+//            iv. On synchronise afin que les threads puissent finir leur calcul avant de passer aux blocs suivants de A et B
+//         c) On stocke le résultat dans C_{iloc,jloc}
+//
+void main()
+{
+    const int N = constantes.dimension;
+    uint row = gl_GlobalInvocationID.y;
+    uint col = gl_GlobalInvocationID.x;
+
+    float value = 0.0;
+
+    // Pour chaque bloc de travail k
+    for (int k = 0; k < (N + WRK_GRP-1) / WRK_GRP; ++k) 
+    {
+        // Charger A et B dans la mémoire partagée
+        if (k * WRK_GRP + gl_LocalInvocationID.x < N && row < N) {
+            sharedA[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = A[row * N + (k * WRK_GRP + gl_LocalInvocationID.x)];
+        } else {
+            sharedA[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = 0.0;
+        }
+
+        if (k * WRK_GRP + gl_LocalInvocationID.y < N && col < N) {
+            sharedB[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = B[(k * WRK_GRP + gl_LocalInvocationID.y) * N + col];
+        } else {
+            sharedB[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = 0.0;
+        }
+
+        // Synchroniser pour s'assurer que les données sont chargées
+        barrier();
+
+        // Calculer la somme des produits
+        for (int i = 0; i < WRK_GRP; ++i) 
+        {
+            value += sharedA[gl_LocalInvocationID.y][i] * sharedB[i][gl_LocalInvocationID.x];
+        }
+
+        // Synchroniser à nouveau avant de charger de nouveaux blocs
+        barrier();
+    }
+
+    // Écrire le résultat dans la matrice de sortie
+    if (row < N && col < N) 
+    {
+        C[row * N + col] = value;
+    }
+
+}
+#elif OPTIM == 2
+#  define WPT 8
+#  define RTS (WRK_GRP/WPT)
+layout(local_size_x = WRK_GRP, local_size_y = RTS) in;
+
+shared float sharedA[WRK_GRP][WRK_GRP];
+shared float sharedB[WRK_GRP][WRK_GRP];
+
+// Même principe que OPTIM=1, sauf qu'on considère un bloc ayant WPT fois plus de lignes que de threads dans cette direction
+// Du coup, chaque thread va s'occuper de plusieurs coefficients de C
+// L'idée est simplement de donner plus de charge de travail par thread pour améliorer la performance.
+void main()
+{
+    const int N = constantes.dimension;
+    uint loc_row = gl_LocalInvocationID.y;
+    uint loc_col = gl_LocalInvocationID.x;
+    uint glob_row = ((gl_GlobalInvocationID.y*WPT)/WRK_GRP) * WRK_GRP + loc_row;
+    uint glob_col = gl_GlobalInvocationID.x;
+
+    float value[WPT];
+    for (int iv = 0; iv < WPT; ++iv)
+       value[iv] = 0.0f;
+
+    // Pour chaque bloc de travail k
+    for (int k = 0; k < (N + WRK_GRP-1) / WRK_GRP; ++k)
+    {
+        for (int w = 0; w < WPT; ++w)
+        {
+            const uint tiled_row = WRK_GRP*k + loc_row;
+            const uint tiled_col = WRK_GRP*k + loc_col;
+            // Charger A et B dans la mémoire partagée
+            if (tiled_col < N && (glob_row + w * RTS) < N) 
+            {
+                sharedA[loc_row + w * RTS][loc_col] = A[(glob_row + w * RTS) * N + tiled_col];
+            } 
+            else 
+            {
+                sharedA[loc_row + w * RTS][loc_col] = 0.0f;
+            }
+
+            if ((tiled_row + w * RTS) < N && glob_col < N) 
+            {
+                sharedB[loc_col][loc_row + w * RTS] = B[(tiled_row + w * RTS) * N + glob_col];
+            } 
+            else 
+            {
+                sharedB[loc_col][loc_row + w * RTS] = 0.0f;
+            }
+        }
+        // Synchroniser pour s'assurer que les données sont chargées
+        barrier();
+
+        // Calculer la somme des produits
+        for (int i = 0; i < WRK_GRP; ++i) 
+        {
+            for (int w = 0; w < WPT; ++w )
+                value[w] += sharedA[loc_row + w * RTS][i] * sharedB[loc_col][i];
+        }
+
+        // Synchroniser à nouveau avant de charger de nouveaux blocs
+        barrier();
+    }
+
+    // Écrire le résultat dans la matrice de sortie
+    for (int w = 0; w < WPT; ++w)
+    {
+        if ((glob_row + w * RTS) < N && glob_col  < N) 
+        {
+            C[(glob_row + w * RTS) * N + glob_col] += value[w];
+        }
+    }
+}
+#else
+#define TSK  16
+#define TSM  128
+#define WPTM 8
+// LPT devrait être égal à 8
+#define LPT  ((TSK*WPTM*WPTM)/TSM)
+#define RTS  (TSM/WPTM)
+
+layout(local_size_x = RTS, local_size_y = RTS) in;
+
+shared float sharedA[TSK][TSM];
+shared float sharedB[TSM][TSK];
+
+// Ici, on rajoute un second niveau de "mémoire cache" en utilisant des registres comme deuxième niveau de cache
+// (un GPU contient énormément de registres qui sont distribués pour chaque thread d'un bloc)
+void main()
+{
+    const int  N = constantes.dimension;
+    const uint id_row = gl_LocalInvocationID.y; // indice ligne locale (max: TSM/WPTM == RTSM)
+    const uint id_col = gl_LocalInvocationID.x; // indice colone locale (max: TSN/WPTN == RTSN)
+    const uint group_x = (gl_GlobalInvocationID.x / RTS);
+    const uint group_y = (gl_GlobalInvocationID.y / RTS);
+    const uint offset_col_B = TSM * group_x; // Offset pour la première colonne du bloc de B
+    const uint offset_row_A = TSM * group_y; // Offset pour la première ligne du bloc de B
+
+    // Allocation de tableaux de registres !
+    float Areg;
+    float Breg[WPTM];
+    float acc[WPTM][WPTM];
+
+    // Initialisation des tableaux de registre
+    for (int wm=0; wm<WPTM; wm++) 
+    {
+        for (int wn=0; wn<WPTM; wn++) 
+        {
+            acc[wm][wn] = 0.0f;
+        }
+    }
+    
+    // Calcul de CIJ :
+    // Pour chaque bloc AIk et BkJ :
+    for (int k = 0; k < (N + TSK -1) / TSK; ++k)
+    {
+        uint offset_col_A = k * TSK + id_col;
+        uint offset_row_B = k * TSK + id_row;
+        for (int w = 0; w < WPTM; ++w)
+        {
+            uint loc_row_A = id_row + w * RTS;
+            uint loc_col_B = id_col + w * RTS;
+            if ((offset_row_A + loc_row_A < N) && (offset_col_A < N))
+                sharedA[id_col][loc_row_A] = A[(offset_row_A + loc_row_A)*N + offset_col_A];
+            else 
+                sharedA[id_col][loc_row_A] = 0;
+            if ((offset_row_B < N) && (offset_col_B + loc_col_B < N))
+                sharedB[loc_col_B][id_row] = B[offset_row_B*N + offset_col_B + loc_col_B];
+            else
+                sharedB[loc_col_B][id_row] = 0;
+        }
+        barrier();
+        for (int t = 0; t < TSK; ++t )
+        {
+            for (int wn = 0; wn < WPTM; ++wn)
+            {
+                uint col = wn * RTS + id_col;
+                Breg[wn] = sharedB[col][t];
+            }
+            for (int wm = 0; wm < WPTM; ++wm)
+            {
+                uint row = id_row + wm * RTS;
+                Areg = sharedA[t][row];
+                for (int wn=0; wn < WPTM; ++wn)
+                {
+                    acc[wm][wn] += Areg * Breg[wn];
+                }
+            }
+        }
+        barrier();
+    }
+    // On stocke les résultats trouvés dans C :
+    for (int wm=0; wm<WPTM; wm++) 
+    {
+        uint globalRow = offset_row_A + id_row + wm * RTS;
+        for (int wn=0; wn<WPTM; wn++) 
+        {
+            uint globalCol = offset_col_B + id_col + wn*RTS;
+            C[globalRow*N + globalCol] = acc[wm][wn];
+        }
+    }
+}
+#endif
